@@ -6,4 +6,4 @@ Live INR ⇄ USD converter (plus EUR, GBP, AED, SAR and more). Installable on An
 
 On Android: open the link in Chrome → ⋮ menu → **Install app**.
 
-Rates are mid-market, fetched live from ExchangeRate-API, with Currency-API and ECB (Frankfurter) as fallbacks.
+Rates are mid-market, fetched live from Coinbase, with the European Central Bank, Currency-API and ExchangeRate-API as fallbacks.

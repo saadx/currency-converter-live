@@ -172,12 +172,9 @@
 <script>
 (function () {
   "use strict";
-  // Rates fetched on 20 Nov 2026 — used only until a live rate arrives (first open with no network).
-  var BUILTIN = { base: "INR", date: "2026-11-20T00:02:32Z", src: "built-in",
-    rates: { USD: 0.01071, EUR: 0.009758, GBP: 0.008165, AED: 0.039332, SAR: 0.040162, CAD: 0.015344,
-             AUD: 0.016043, SGD: 0.013833, JPY: 1.713383, CHF: 0.009036, CNY: 0.071356, QAR: 0.038984,
-             KWD: 0.003333, OMR: 0.004118, BHD: 0.004027, NZD: 0.019459, HKD: 0.084078, MYR: 0.04408,
-             THB: 0.363782, PKR: 2.962241, BDT: 1.333441, NPR: 1.6, LKR: 3.56468 } };
+  // Rates fetched on 21 Nov 2026 — used only until a live rate arrives (first open with no network).
+  var BUILTIN = { v: 2, base: "INR", date: "2026-11-21T10:55:00Z", src: "built-in",
+    rates: { USD: 0.010792219, EUR: 0.0098397783, GBP: 0.0082502701, AED: 0.039634693, SAR: 0.040448194, CAD: 0.015484621, AUD: 0.016297729, SGD: 0.013919588, JPY: 1.7111602, CHF: 0.0090683775, CNY: 0.072036063, QAR: 0.039350275, KWD: 0.0033646198, OMR: 0.0041501693, BHD: 0.0040682995, NZD: 0.019727026, HKD: 0.084592216, MYR: 0.044388395, THB: 0.36585127, PKR: 2.9810232, BDT: 1.3407085, NPR: 1.5972261, LKR: 3.5842973 } };
   var CURRENCIES = [
     ["USD","US Dollar","$"],["EUR","Euro","€"],["GBP","British Pound","£"],["AED","UAE Dirham","AED"],
     ["SAR","Saudi Riyal","SAR"],["CAD","Canadian Dollar","C$"],["AUD","Australian Dollar","A$"],
@@ -187,7 +184,7 @@
     ["NZD","New Zealand Dollar","NZ$"],["MYR","Malaysian Ringgit","RM"],["THB","Thai Baht","฿"],
     ["PKR","Pakistani Rupee","Rs"],["BDT","Bangladeshi Taka","৳"],["NPR","Nepalese Rupee","Rs"],["LKR","Sri Lankan Rupee","Rs"]
   ];
-  var STALE_MS = 60 * 60 * 1000; // refresh if older than 1 hour
+  var STALE_MS = 10 * 60 * 1000; // refresh if older than 10 minutes
 
   var $ = function (id) { return document.getElementById(id); };
   var inrEl = $("inr"), fxEl = $("fx"), curEl = $("cur");
@@ -199,7 +196,7 @@
   var lastEdited = "inr";
   try { data = JSON.parse(store("rates") || "null"); } catch (e) { data = null; }
   try { manual = JSON.parse(store("manual") || "null"); } catch (e) { manual = null; }
-  if (!data || !data.rates || !data.rates.USD) data = BUILTIN;
+  if (!data || data.v !== 2 || !data.rates || !data.rates.USD) data = BUILTIN;
 
   CURRENCIES.forEach(function (c) {
     var o = document.createElement("option"); o.value = c[0]; o.textContent = c[0] + " · " + c[1]; curEl.appendChild(o);
@@ -303,10 +300,12 @@
       st.className = "pill manual"; st.textContent = "Your rate";
       $("source").textContent = "Using the rate you entered. Live rate: 1 " + cur + " = ₹" + (data.rates[cur] ? (1 / data.rates[cur]).toFixed(4) : "—") + ".";
     } else {
-      var age = Date.now() - new Date(data.fetched || data.date).getTime();
-      var fresh = data.src !== "built-in" && age < 26 * 3600 * 1000;
-      st.className = "pill " + (fresh ? "live" : "old");
-      st.textContent = fresh ? "Live" : "Saved rate";
+      var pubAge = Date.now() - new Date(data.date).getTime();
+      var checkAge = Date.now() - new Date(data.fetched || data.date).getTime();
+      var live = data.src !== "built-in" && pubAge < 2 * 3600 * 1000 && checkAge < 2 * 3600 * 1000;
+      var daily = !live && data.src !== "built-in" && pubAge < 30 * 3600 * 1000;
+      st.className = "pill " + (live ? "live" : daily ? "manual" : "old");
+      st.textContent = live ? "Live" : daily ? "Daily rate" : "Saved rate";
       $("source").textContent = "Rate published " + timeAgo(data.date) + " · source: " + data.src +
         (data.fetched && data.src !== "built-in" ? " · checked " + timeAgo(data.fetched) : "");
     }
@@ -341,19 +340,29 @@
         .then(function (j) { clearTimeout(t); resolve(j); }, function (e) { clearTimeout(t); reject(e); });
     });
   }
+  // Every source is read USD-based (most precise) and converted to "units per 1 INR".
+  function perINR(usdRates, src, date) {
+    var inr = Number(usdRates.INR);
+    if (!(inr > 50 && inr < 200)) throw new Error("bad INR rate");
+    var r = {};
+    Object.keys(usdRates).forEach(function (k) { var v = Number(usdRates[k]); if (v > 0) r[k.toUpperCase()] = v / inr; });
+    r.USD = 1 / inr; r.INR = 1;
+    return { v: 2, rates: r, date: date, src: src };
+  }
   var SOURCES = [
-    function () { return getJSON("https://open.er-api.com/v6/latest/INR").then(function (j) {
-      if (j.result !== "success" || !j.rates || !j.rates.USD) throw new Error("bad");
-      return { rates: j.rates, date: new Date(j.time_last_update_unix * 1000).toISOString(), src: "ExchangeRate-API" }; }); },
-    function () { return getJSON("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/inr.json")
-      .catch(function () { return getJSON("https://latest.currency-api.pages.dev/v1/currencies/inr.json"); })
-      .then(function (j) {
-        if (!j.inr || !j.inr.usd) throw new Error("bad");
-        var r = {}; Object.keys(j.inr).forEach(function (k) { r[k.toUpperCase()] = j.inr[k]; });
-        return { rates: r, date: j.date + "T00:00:00Z", src: "Currency-API" }; }); },
-    function () { return getJSON("https://api.frankfurter.app/latest?from=INR").then(function (j) {
-      if (!j.rates || !j.rates.USD) throw new Error("bad");
-      return { rates: j.rates, date: j.date + "T16:00:00Z", src: "ECB (Frankfurter)" }; }); }
+    // Live, updates every few minutes
+    function () { return getJSON("https://api.coinbase.com/v2/exchange-rates?currency=USD").then(function (j) {
+      return perINR(j.data.rates, "Coinbase (live)", new Date().toISOString()); }); },
+    // ECB official reference rate, once a day
+    function () { return getJSON("https://api.frankfurter.dev/v1/latest?base=USD").then(function (j) {
+      return perINR(j.rates, "European Central Bank", j.date + "T14:15:00Z"); }); },
+    // Daily fallbacks
+    function () { return getJSON("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.min.json")
+      .catch(function () { return getJSON("https://latest.currency-api.pages.dev/v1/currencies/usd.min.json"); })
+      .then(function (j) { return perINR(j.usd, "Currency-API", j.date + "T00:00:00Z"); }); },
+    function () { return getJSON("https://open.er-api.com/v6/latest/USD").then(function (j) {
+      if (j.result !== "success") throw new Error("bad");
+      return perINR(j.rates, "ExchangeRate-API", new Date(j.time_last_update_unix * 1000).toISOString()); }); }
   ];
 
   var loading = false;
@@ -366,7 +375,7 @@
       if (i >= SOURCES.length) { done(false); return; }
       SOURCES[i++]().then(function (d) {
         d.fetched = new Date().toISOString();
-        d.rates.INR = 1;
+        Object.keys(data.rates || {}).forEach(function (k) { if (!(d.rates[k] > 0)) d.rates[k] = data.rates[k]; });
         data = d; store("rates", JSON.stringify(d)); done(true);
       }, next);
     })();
