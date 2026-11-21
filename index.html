@@ -69,6 +69,13 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spin svg { animation: none; } }
 
+  .toast {
+    font-size: .88rem; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--card); display: flex; gap: 8px; align-items: center;
+  }
+  .toast.ok { border-color: var(--good); color: var(--good); }
+  .toast.bad { border-color: var(--warn); color: var(--warn); }
+  .iconbtn[disabled] { opacity: .7; }
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 18px;
     padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 4px;
@@ -127,9 +134,10 @@
     <h1>Rupee Converter</h1>
     <button class="iconbtn" id="refresh" type="button" aria-label="Refresh exchange rate">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-      <span>Refresh</span>
+      <span id="refreshLabel">Refresh</span>
     </button>
   </header>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
   <section class="card" id="cardA">
     <div class="cardtop"><span class="code">INR <small>Indian Rupee</small></span></div>
@@ -307,7 +315,7 @@
       st.className = "pill " + (live ? "live" : daily ? "manual" : "old");
       st.textContent = live ? "Live" : daily ? "Daily rate" : "Saved rate";
       $("source").textContent = "Rate published " + timeAgo(data.date) + " · source: " + data.src +
-        (data.fetched && data.src !== "built-in" ? " · checked " + timeAgo(data.fetched) : "");
+        (data.fetched && data.src !== "built-in" ? " · checked " + clock(data.fetched) : "");
     }
   }
 
@@ -365,24 +373,46 @@
       return perINR(j.rates, "ExchangeRate-API", new Date(j.time_last_update_unix * 1000).toISOString()); }); }
   ];
 
-  var loading = false;
+  var loading = false, toastTimer = null;
+  function clock(d) { return new Date(d).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit" }); }
+  function toast(msg, kind) {
+    var t = $("toast"); t.textContent = msg; t.className = "toast " + (kind || ""); t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 6000);
+  }
+  function usdText(d) { return d && d.rates && d.rates.USD ? "₹" + (1 / d.rates.USD).toFixed(4) : "—"; }
+
   function refresh(force) {
     if (loading) return;
     if (!force && data.src !== "built-in" && data.fetched && Date.now() - new Date(data.fetched).getTime() < STALE_MS) return;
-    loading = true; $("refresh").classList.add("spin");
+    loading = true;
+    var btn = $("refresh"), before = data, started = Date.now();
+    if (force) { btn.classList.add("spin"); btn.disabled = true; $("refreshLabel").textContent = "Updating…"; }
     var i = 0;
     (function next() {
-      if (i >= SOURCES.length) { done(false); return; }
+      if (i >= SOURCES.length) { finish(false); return; }
       SOURCES[i++]().then(function (d) {
         d.fetched = new Date().toISOString();
         Object.keys(data.rates || {}).forEach(function (k) { if (!(d.rates[k] > 0)) d.rates[k] = data.rates[k]; });
-        data = d; store("rates", JSON.stringify(d)); done(true);
+        data = d; store("rates", JSON.stringify(d)); finish(true);
       }, next);
     })();
+    function finish(ok) {
+      // keep the spinner up briefly so a fast update is still visible
+      setTimeout(function () { done(ok); }, force ? Math.max(0, 700 - (Date.now() - started)) : 0);
+    }
     function done(ok) {
-      loading = false; $("refresh").classList.remove("spin");
+      loading = false; btn.classList.remove("spin"); btn.disabled = false; $("refreshLabel").textContent = "Refresh";
       renderRate(); compute();
-      if (!ok && force) $("source").textContent = "Couldn't reach the rate servers. Showing the last saved rate (" + timeAgo(data.date) + ").";
+      if (!force) return;
+      if (ok) {
+        var was = usdText(before), now = usdText(data);
+        var msg = "✓ Updated at " + clock(data.fetched) + " · 1 USD = " + now + (was !== now && before.src !== "built-in" ? " (was " + was + ")" : " · no change");
+        if (manual && manual.code === cur) msg += ". You're still using your own rate.";
+        toast(msg, "ok");
+        try { navigator.vibrate && navigator.vibrate(15); } catch (e) {}
+      } else {
+        toast("Couldn't update. Check your internet connection. Showing the rate saved " + timeAgo(data.fetched || data.date) + ".", "bad");
+      }
     }
   }
 
